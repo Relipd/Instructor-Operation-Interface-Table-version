@@ -34,9 +34,15 @@ export function FeedbackDialog({
   useEffect(() => {
     if (open && record) {
       setFeedback('')
-      setHandler(record.handler || '')
+      // 优先用已有处理人，若不在指导员列表中则自动选第一个
+      const currentHandler = record.handler || '';
+      if (instructors.length > 0) {
+        setHandler(instructors.includes(currentHandler) ? currentHandler : instructors[0]);
+      } else {
+        setHandler(currentHandler);
+      }
     }
-  }, [open, record])
+  }, [open, record, instructors])
 
   const handleSubmit = () => {
     if (!record || !feedback.trim() || !handler.trim()) return
