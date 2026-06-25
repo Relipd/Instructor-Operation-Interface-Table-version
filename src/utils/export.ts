@@ -27,6 +27,9 @@ const COLUMNS: { key: keyof ExceptionRecord; label: string }[] = [
   { key: 'extUserName', label: '外部-用户姓名' },
   { key: 'extUserRoleList', label: '外部-用户角色列表' },
   { key: 'feedback', label: '反馈内容' },
+  { key: 'rectificationFeedback', label: '整改反馈' },
+  { key: 'expectedCompletionTime', label: '预计整改完成时间' },
+  { key: 'riskAction', label: '风险处置' },
 ];
 
 export function exportToExcel(records: ExceptionRecord[], filename?: string) {
@@ -34,7 +37,7 @@ export function exportToExcel(records: ExceptionRecord[], filename?: string) {
     const row: Record<string, string> = {};
     for (const col of COLUMNS) {
       const val = r[col.key];
-      row[col.label] = typeof val === 'boolean' ? (val ? '是' : '否') : (val as string) || '';
+      row[col.label] = typeof val === 'boolean' ? (val ? '是' : '否') : String(val ?? '');
     }
     return row;
   });

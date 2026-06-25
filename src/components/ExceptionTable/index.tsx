@@ -24,6 +24,7 @@ import {
   Download,
 } from 'lucide-react'
 import { StatusBadge } from '@/components/StatusBadge'
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { exportToExcel } from '@/utils/export'
 import type { ExceptionRecord, ActionType } from '@/types'
@@ -33,10 +34,13 @@ interface ExceptionTableProps {
   statusFilter?: string
   riskFilter?: string
   platformFilter?: string
+  exceptionTypeFilter?: string
   searchKeyword?: string
+  loading?: boolean
   onStatusFilterChange?: (v: string) => void
   onRiskFilterChange?: (v: string) => void
   onPlatformFilterChange?: (v: string) => void
+  onExceptionTypeFilterChange?: (v: string) => void
   onSearchKeywordChange?: (v: string) => void
   onViewDetail: (record: ExceptionRecord) => void
   onAction: (action: ActionType, record: ExceptionRecord) => void
@@ -47,7 +51,20 @@ const PAGE_SIZE = 20
 function TooltipCell({ value, className }: { value: string; className?: string }) {
   if (!value) return <span className={className}>-</span>
   return (
-    <span className={`truncate block ${className || ''}`} title={value}>{value}</span>
+    <span className={`truncate block ${className || ''}`}>{value}</span>
+  )
+}
+
+/** 带自定义悬浮提示的单元格内容（Radix Tooltip，Portal 渲染不受表格 overflow 裁剪） */
+function HoverCell({ value, className }: { value: string; className?: string }) {
+  if (!value) return <span className={className}>-</span>
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={`truncate block cursor-default ${className || ''}`}>{value}</span>
+      </TooltipTrigger>
+      <TooltipContent>{value}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -68,29 +85,29 @@ export const ExceptionTable = React.memo(function ExceptionTable({
   statusFilter: externalStatusFilter,
   riskFilter: externalRiskFilter,
   platformFilter: externalPlatformFilter,
+  exceptionTypeFilter: externalExceptionTypeFilter,
   searchKeyword: externalSearchKeyword,
+  loading = false,
   onStatusFilterChange,
   onRiskFilterChange,
   onPlatformFilterChange,
+  onExceptionTypeFilterChange,
   onSearchKeywordChange,
   onViewDetail,
   onAction,
 }: ExceptionTableProps) {
   const [currentPage, setCurrentPage] = useState(1)
-  const [internalStatusFilter, setInternalStatusFilter] = useState<string>('全部')
-  const [internalRiskFilter, setInternalRiskFilter] = useState<string>('全部')
-  const [internalPlatformFilter, setInternalPlatformFilter] = useState<string>('全部')
-  const [internalSearchKeyword, setInternalSearchKeyword] = useState('')
 
-  const statusFilter = externalStatusFilter ?? internalStatusFilter
-  const riskFilter = externalRiskFilter ?? internalRiskFilter
-  const platformFilter = externalPlatformFilter ?? internalPlatformFilter
-  const searchKeyword = externalSearchKeyword ?? internalSearchKeyword
-
-  const setStatusFilter = onStatusFilterChange || setInternalStatusFilter
-  const setRiskFilter = onRiskFilterChange || setInternalRiskFilter
-  const setPlatformFilter = onPlatformFilterChange || setInternalPlatformFilter
-  const setSearchKeyword = onSearchKeywordChange || setInternalSearchKeyword
+  const statusFilter = externalStatusFilter ?? '全部'
+  const riskFilter = externalRiskFilter ?? '全部'
+  const platformFilter = externalPlatformFilter ?? '全部'
+  const exceptionTypeFilter = externalExceptionTypeFilter ?? '全部'
+  const searchKeyword = externalSearchKeyword ?? ''
+  const setStatusFilter = onStatusFilterChange || (() => {})
+  const setRiskFilter = onRiskFilterChange || (() => {})
+  const setPlatformFilter = onPlatformFilterChange || (() => {})
+  const setExceptionTypeFilter = onExceptionTypeFilterChange || (() => {})
+  const setSearchKeyword = onSearchKeywordChange || (() => {})
 
   // 只把"已完成"排到最后，其余状态保持原顺序
   const filteredRecords = useMemo(() => {
@@ -105,22 +122,24 @@ export const ExceptionTable = React.memo(function ExceptionTable({
       if (riskFilter !== '全部' && record.riskLevel !== riskFilter) return false
       // 平台筛选
       if (platformFilter !== '全部' && record.sourcePlatform !== platformFilter) return false
-      // 关键词搜索
+      // 异常类型筛选
+      if (exceptionTypeFilter !== '全部' && record.exceptionType !== exceptionTypeFilter) return false
+      // 关键词搜索：编号 + 业务渠道指导员 + 申请人
       if (searchKeyword) {
         const keyword = searchKeyword.toLowerCase()
+        const applicant = (record.permApplicant || record.extAccountName || '').toLowerCase()
         return (
           record.exceptionCode.toLowerCase().includes(keyword) ||
-          record.handler.toLowerCase().includes(keyword) ||
-          record.description.toLowerCase().includes(keyword) ||
-          record.reviewTime.toLowerCase().includes(keyword)
+          record.deptInstructors.toLowerCase().includes(keyword) ||
+          applicant.includes(keyword)
         )
       }
       return true
     })
-    const completed = result.filter((r) => r.status === '已完成')
-    const others = result.filter((r) => r.status !== '已完成')
+    const completed = result.filter((r) => r.status === '已完结')
+    const others = result.filter((r) => r.status !== '已完结')
     return [...others, ...completed]
-  }, [records, statusFilter, riskFilter, platformFilter, searchKeyword])
+  }, [records, statusFilter, riskFilter, platformFilter, exceptionTypeFilter, searchKeyword])
 
   // 动态风险选项（从记录中提取原始值）
   const riskOptions = useMemo(() => {
@@ -134,12 +153,21 @@ export const ExceptionTable = React.memo(function ExceptionTable({
     ]
   }, [records])
 
-  // 动态平台选项（从记录中提取不重复的平台值）
+  // 动态平台选项（从主表记录的 sourcePlatform 提取）
   const platformOptions = useMemo(() => {
-    const unique = [...new Set(records.map((r) => r.sourcePlatform).filter(Boolean))]
+    const unique = [...new Set(records.map((r) => r.sourcePlatform).filter(Boolean))];
     return [
       { label: '全部平台', value: '全部' },
       ...unique.map((p) => ({ label: p, value: p })),
+    ]
+  }, [records])
+
+  // 动态异常类型选项（从主表记录的 exceptionType 提取，按名称排序）
+  const exceptionTypeOptions = useMemo(() => {
+    const unique = [...new Set(records.map((r) => r.exceptionType).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    return [
+      { label: '全部类型', value: '全部' },
+      ...unique.map((t) => ({ label: t, value: t })),
     ]
   }, [records])
 
@@ -147,8 +175,8 @@ export const ExceptionTable = React.memo(function ExceptionTable({
   const statusOptions = useMemo(() => [
     { label: '全部状态', value: '全部' },
     { label: '待处理', value: '待处理' },
-    { label: '处理中', value: '处理中' },
-    { label: '已完成', value: '已完成' },
+    { label: '整改中', value: '整改中' },
+    { label: '已完结', value: '已完结' },
     { label: '已超时', value: '已超时' },
   ], [])
 
@@ -166,16 +194,17 @@ export const ExceptionTable = React.memo(function ExceptionTable({
   }
 
   return (
-    <div className="space-y-4">
+    <TooltipProvider delayDuration={200}>
+    <div className="space-y-2">
       {/* 筛选栏 */}
-      <div className="flex items-center gap-3 rounded-lg border border-[#e5e6eb] bg-white p-3">
-        <div className="flex items-center gap-2 text-sm text-[#646a73]">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#e5e6eb] bg-white p-2">
+        <div className="flex items-center gap-1.5 text-sm text-[#646a73] pr-1">
           <Filter className="h-4 w-4" />
           <span>筛选</span>
         </div>
 
         <Select value={statusFilter} onValueChange={handleFilterChange(setStatusFilter)}>
-          <SelectTrigger className="h-8 w-[130px]">
+          <SelectTrigger className="h-8 w-[120px]">
             <SelectValue placeholder="状态" />
           </SelectTrigger>
           <SelectContent>
@@ -188,7 +217,7 @@ export const ExceptionTable = React.memo(function ExceptionTable({
         </Select>
 
         <Select value={riskFilter} onValueChange={handleFilterChange(setRiskFilter)}>
-          <SelectTrigger className="h-8 w-[130px]">
+          <SelectTrigger className="h-8 w-[120px]">
             <SelectValue placeholder="风险等级" />
           </SelectTrigger>
           <SelectContent>
@@ -201,10 +230,10 @@ export const ExceptionTable = React.memo(function ExceptionTable({
         </Select>
 
         <Select value={platformFilter} onValueChange={handleFilterChange(setPlatformFilter)}>
-          <SelectTrigger className="h-8 w-[130px]">
+          <SelectTrigger className="h-8 w-[120px]">
             <SelectValue placeholder="来源平台" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="max-h-[180px]">
             {platformOptions.map((opt) => (
               <SelectItem key={opt.value} value={opt.value}>
                 {opt.label}
@@ -213,10 +242,32 @@ export const ExceptionTable = React.memo(function ExceptionTable({
           </SelectContent>
         </Select>
 
-        <div className="relative ml-auto">
+        <Select value={exceptionTypeFilter} onValueChange={handleFilterChange(setExceptionTypeFilter)}>
+          <SelectTrigger className="h-8 w-[160px]">
+            <SelectValue placeholder="异常类型" />
+          </SelectTrigger>
+          <SelectContent className="max-h-[220px] min-w-[16rem]">
+            {exceptionTypeOptions.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <a
+          href="https://kttfkmbfmy.feishu.cn/wiki/DJd0wfFLficLNTkx41tcxBU4n8b"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm text-[#3370ff] hover:underline ml-auto"
+        >
+          指引
+        </a>
+
+        <div className="relative">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#8f959e]" />
           <Input
-            placeholder="搜索编号、处理人..."
+            placeholder="搜索编号、指导员、申请人..."
             value={searchKeyword}
             onChange={(e) => {
               setSearchKeyword(e.target.value)
@@ -226,14 +277,14 @@ export const ExceptionTable = React.memo(function ExceptionTable({
           />
         </div>
 
-        <div className="text-sm text-[#646a73]">
+        <div className="text-sm text-[#646a73] whitespace-nowrap">
           共 <span className="font-medium text-[#1f2329]">{filteredRecords.length}</span> 条
         </div>
 
         <Button
           variant="outline"
           size="sm"
-          className="h-8 px-3 text-xs gap-1.5"
+          className="h-8 px-3 text-xs gap-1.5 whitespace-nowrap"
           onClick={() => exportToExcel(filteredRecords)}
           disabled={filteredRecords.length === 0}
         >
@@ -261,7 +312,17 @@ export const ExceptionTable = React.memo(function ExceptionTable({
             {paginatedRecords.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={8} className="h-32 text-center text-[#8f959e]">
-                  暂无数据
+                  {loading ? (
+                    <div className="flex flex-col items-center gap-2">
+                      <svg className="h-5 w-5 animate-spin text-[#3370ff]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      <span>正在拉取数据，请稍候…</span>
+                    </div>
+                  ) : (
+                    '暂无数据'
+                  )}
                 </TableCell>
               </TableRow>
             ) : (
@@ -278,23 +339,23 @@ export const ExceptionTable = React.memo(function ExceptionTable({
                   <TableCell className="text-center">
                     <TooltipCell value={record.sourcePlatform} className="text-[#646a73]" />
                   </TableCell>
-                  <TableCell>
-                    <TooltipCell value={record.exceptionType} className="text-[#1f2329]" />
+                  <TableCell className="text-center">
+                    <HoverCell value={record.exceptionType} className="text-[#1f2329]" />
                   </TableCell>
-                  <TableCell>
-                    <TooltipCell value={record.description} className="text-[#646a73]" />
+                  <TableCell className="text-center">
+                    <HoverCell value={record.description} className="text-[#646a73]" />
                   </TableCell>
                   <TableCell className="text-center">
                     <TooltipCell value={applicant} className="text-[#1f2329]" />
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="text-center">
                     <StatusBadge status={record.status} />
                   </TableCell>
                   <TableCell className="text-center">
-                    <span className="text-[#646a73]">{record.reviewTime || '-'}</span>
+                    <span className="truncate block text-[#646a73]">{record.reviewTime || '-'}</span>
                   </TableCell>
                   <TableCell className="text-center">
-                    <span className="text-[#646a73]">{deadlineText}</span>
+                    <span className="truncate block text-[#646a73]">{deadlineText}</span>
                   </TableCell>
                   <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-center gap-1.5">
@@ -308,14 +369,14 @@ export const ExceptionTable = React.memo(function ExceptionTable({
                           确认核查
                         </Button>
                       )}
-                      {record.status === '处理中' && (
+                      {record.status === '整改中' && (
                         <Button
                           variant="default"
                           size="sm"
                           className="h-7 px-2.5 bg-[#ff9500] text-xs hover:bg-[#e68600] whitespace-nowrap"
                           onClick={() => onAction('feedback', record)}
                         >
-                          反馈
+                          情况反馈
                         </Button>
                       )}
                     </div>
@@ -432,5 +493,6 @@ export const ExceptionTable = React.memo(function ExceptionTable({
         )}
       </div>
     </div>
+    </TooltipProvider>
   )
 });

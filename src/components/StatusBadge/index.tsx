@@ -8,8 +8,8 @@ interface StatusBadgeProps {
 
 const statusConfig: Record<ExceptionStatus, { bg: string; text: string; dot: string }> = {
   '待处理': { bg: 'bg-[#ffeaeb]', text: 'text-[#ff3b30]', dot: 'bg-[#ff3b30]' },
-  '处理中': { bg: 'bg-[#fff4e5]', text: 'text-[#ff9500]', dot: 'bg-[#ff9500]' },
-  '已完成': { bg: 'bg-[#e8faf0]', text: 'text-[#34c759]', dot: 'bg-[#34c759]' },
+  '整改中': { bg: 'bg-[#fff4e5]', text: 'text-[#ff9500]', dot: 'bg-[#ff9500]' },
+  '已完结': { bg: 'bg-[#e8faf0]', text: 'text-[#34c759]', dot: 'bg-[#34c759]' },
 }
 
 export function StatusBadge({ status, className }: StatusBadgeProps) {
